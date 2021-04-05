@@ -1,0 +1,223 @@
+# 1,2, já e 3!
+Sincronizando código concorrente
+
+Alex Rios
+alex.rios@pm.me
+alexrios.dev
+
+## Quem sou eu?
+.image avatar-redondo.png _ 300
+- Community Organizer - Golang CWB
+- Tech Reviewer - Manning Publications
+- Tech Lead - Wildlife Studios
+
+## Desafios no dia-a-dia
+- APIs com 100k+ RPM
+- 800 TB de dados sendo processados todos os dias
+- Milhões de jogadores conectados simultaneamente em partidas multiplayer em todo planeta
+
+.image wildlife-logo.png _ 400
+
+## Go Design
+Go was designed at Google in 2007 to improve programming productivity in an era of **multicore**, networked machines and large codebases.
+
+## Concorrência
+Já ouviu falar alguma vez no contexo de concorrência?
+- Wait Groups
+- Mutexes
+- Channels
+
+## Data Race
+.image data_race.png _ 500
+
+## Qual retorno dessa função?
+.play -numbers -edit datarace/1-1-naive/datarace.go /^func Datarace/,/^}/
+
+## Dá para confiar?
+.play -numbers -edit datarace/1-2-naive-test/datarace.go /^func Test/,/^}/
+
+## Por que funciona na maioria das vezes?
+CPU BOUND
+
+Esse algoritimo normalmente **não** vai ser interrompido ao menos que aconteça algum ruído ou apenas preempção mesmo.
+
+O cenário mais comum com extremo ruído é um ambiente na cloud.
+
+
+## Criando ruído
+.play -numbers -edit datarace/2-noise/datarace.go /^func Datarace/,/^}/
+
+## OK! syscall
+.play -numbers -edit datarace/3-common-noise/datarace.go /^func Datarace/,/^}/
+
+## Por que falha mais constantemente?
+Syscall, nesse caso I/O é uma excelente dica para o Go Scheduler entender que pode aproveitar
+melhor o tempo executando outros processos que precisam do processador mais que apenas ficar esperando.
+
+Dentro da sua App isso seria uma chamada para o banco de dados, outro serviço, escrita de logs e etc.
+
+(SIM! log aumenta latência do seu programa)
+
+
+## Por que o scheduler interrompe uma go routine durante a syscall?
+
+Quando sua App:
+- manda um pacote BRA - USA - BRA leva 150ms
+- lê sequencialmente 1MB de um SSD leva 1ms
+- faz um roundtrip no mesmo datacenter isso leva 0.5ms
+- manda 1KB numa rede gigabit leva 10µs
+
+10µs é incrivelmente rápido, certo?
+
+## Por que o scheduler interrompe uma go routine durante a syscall?
+
+ex: Intel i7 com 3GHz com 4 cores.
+
+**3GHz (3 clock cycles/ns) * 4 instructions per cycle = 12 instructions per ns!**
+
+Ou seja:
+
+```
+1 ns ............. 1 ns .............. 12 instructions  (one)
+
+1 µs .......... 1000 ns .......... 12,000 instructions  (thousand)
+
+1 ms ..... 1,000,000 ns ...... 12,000,000 instructions  (million)
+
+1 s .. 1,000,000,000 ns .. 12,000,000,000 instructions  (billion)
+```
+
+## Por que o scheduler interrompe uma go routine durante a syscall?
+Com 10µs desperdiçamos  120.000 instruções do processador!
+
+## Atomic Structures
+
+## Atomic Structures
+.play -numbers -edit datarace/4-1-atomic/datarace.go /^func Datarace/,/^}/
+
+## Mutexes
+Eu não quero mudar a lógica do meu programa.
+
+Eu quero apenas delimitar quando acessos simultâneos podem acontecer.
+
+## Mutex
+.play -numbers datarace/5-mutex/mutex.go /^func Datarace/,/^}/
+
+## Tive uma ideia genial
+.play -numbers datarace/5-mutex/mutex.go /^func DataraceMultiple/,/^}/
+
+## Essas interrupções tem um preço
+.image datarace/5-mutex/benchmark-mutexes.png _ 1000
+
+## De 2 para 50_000 go routines
+.image datarace/6-mutex-latency/latencia-mutex.png _ 1000
+
+Toda essa sincronização gera back pressure (latência).
+
+## Proverbs
+Don't communicate by sharing memory, share memory by communicating.
+
+Comunicação nesse contexto é mesma coisa que sinalização.
+E como fazemos sinalização em Go?
+
+## Channels
+Channels não são filas de mensagens, mas canais de sinalização.
+
+Para falar de channels temos que pensar primeiro na garantia da recepção do sinal.
+
+## Garantias
+Uma go routine **PRECISA** que outra receba a sinalização?
+
+Pense num aperto de mãos.
+
+Uma pessoa sinaliza que quer fazer apertar a sua mão, mas sem outra pessoa receber esse aperto de mão, você fica em *deadlock*.
+
+## Garantias
+Ter essa garantia gera latência, pois uma go routine **não vai continuar** seu trabalho sem a sinalização acontecer.
+
+Quando queremos ter essa garantia usamos o unbuffered channel:
+```
+handshaker := make(chan bool)
+```
+
+## Diminuindo a latência
+Go routine 1 (volley machine)
+
+Go routine 2 (Humano recarregando)
+
+.image volleyball-machine.jpeg _ 400
+
+```
+superShooter := make(chan Ball, 6) // Não temos garantia
+```
+
+```
+singleShooter := make(chan Ball, 1) // Garantia atrasada
+```
+
+## Tudo começa aqui
+- Esperando pela tarefa
+- Esperando pelo resultado
+- Esperando pela finalização
+
+## Esperando pela tarefa
+Passa a tarefa para uma go routine e espera ela acabar.
+
+Não temos garantia da ordem que serão executados o sender ou o receiver.
+
+.play -numbers channels/waiting-for-task/main.go /^func waitForTask/,/^}/
+
+## Esperando pelo resultado
+a go routine já conhece a tarefa que deve ser feita e esperamos por ela acabar.
+
+Não temos garantia da ordem que serão executados o sender ou o receiver.
+
+.play -numbers channels/waiting-for-result/main.go /^func waitForResult/,/^}/
+
+## Patterns
+
+Pattern básico:
+- pooling
+
+Patterns avançados:
+- fan out semaphore
+- bounded work pooling
+- drop
+
+Outros:
+- cancellation
+- retry timeout
+- channel cancellation
+
+## Esperando pela finalização
+Nesse pattern não estamos interessados no resultado, apenas na sua finalização.
+
+.play -numbers channels/waiting-for-finished/main.go /^func waitForFinished/,/^}/
+
+*Esse é o típico caso que podemos resolver com um `sync.WaitGroup`.*
+
+## Considerações finais: devo usar mutexes ou channels?
+Os mecanismos de lock da linguagem estão no pacote `sync`.
+
+A maioria dos problemas podem ser resolvido tanto com locks quanto com channels.
+
+## Qual escolher?
+
+O que for o mais expressivo e/ou o mais simples.
+
+Se mutex for melhor para o seu problema, use!
+
+**PREFIRA O PRAGMATISMO!**
+
+## Não me ajudou em nada, tem algum guideline?
+TEM!
+
+**use channel para**:
+- passar ownership do dado
+- distribuir unidades de trabalho
+- comunicar resultados de forma assíncrona
+
+**use mutex para**:
+- caches
+- estado
+
